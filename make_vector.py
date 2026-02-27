@@ -76,9 +76,10 @@ def create_vectorstore(files):
             pages = loader.load()
             if not pages: continue
 
-            for page in pages:
+            for page_num, page in enumerate(pages): # enumerateを追加
                 page.metadata["source"] = file["path"]
                 page.metadata["name"] = file["name"]
+                page.metadata["page"] = page_num + 1 # ページ番号を保存
 
             # 2. 分割実行
             raw_docs = text_splitter.split_documents(pages)

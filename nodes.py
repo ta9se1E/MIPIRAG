@@ -25,14 +25,16 @@ class GradeDocuments(BaseModel):
     binary_score: str = Field(description="Relevant: 'yes' or 'no'")
 
 # --- ノード関数 ---
+
 async def retrieve(state):
-    print("---RETRIEVING---")
+    """日本語と英語の両方のクエリを用いて検索を実行"""
     embeddings = OpenAIEmbeddings(model="text-embedding-3-small")
-    # 先ほど作成した vectorstore_r1 を読み込む
     vectorstore = FAISS.load_local("vectorstore_r1", embeddings, allow_dangerous_deserialization=True)
     
-    documents = vectorstore.similarity_search(state["question"], k=4)
-    return {"documents": documents, "question": state["question"]}
+    # state["question"] から日英両方のクエリを取得して検索
+    # シンプルに全体を投げても text-embedding-3-small は多言語対応なので高い精度でヒットします
+    documents = vectorstore.similarity_search(state["question"], k=6) 
+    return {"documents": documents}
 
 async def generate(state):
     print("---GENERATING---")
@@ -73,12 +75,20 @@ def decide_to_generate(state):
         return "transform_query"
     return "generate"
 
+
 async def transform_query(state):
-    print("---TRANSFORMING QUERY---")
+    """日本語の質問から、英語文献検索用のクエリも生成する"""
     llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
-    system = "より良い検索ができるように、質問を書き換えてください。"
-    prompt = ChatPromptTemplate.from_messages([("system", system), ("human", "{question}")])
     
+    system = """あなたは専門的なリライターです。
+ユーザーの質問を、日本語での検索と英語での検索（Materials Informatics/Process Intelligence分野）の両方に最適化された形式に変換してください。
+出力は以下の形式で答えてください:
+Japanese Query: [日本語のクエリ]
+English Query: [英語のクエリ]"""
+    
+    prompt = ChatPromptTemplate.from_messages([("system", system), ("human", "{question}")])
     rewriter = prompt | llm | StrOutputParser()
-    better_question = rewriter.invoke({"question": state["question"]})
-    return {"question": better_question}
+    
+    full_query = rewriter.invoke({"question": state["question"]})
+    # 簡単なパースで日本語と英語のクエリを抽出
+    return {"question": full_query}

@@ -38,21 +38,29 @@ if prompt := st.chat_input("MIやPIに関する質問をお願いします。"):
     with st.chat_message("user"):
         st.markdown(prompt)
 
+    # app.py (生成部分の表示を強化)
+
     with st.chat_message("assistant"):
-        with st.spinner("思考中..."):
-            # グラフの実行
+        with st.spinner("思考中... 日英両方の文献をスキャンしています..."):
             inputs = {"question": prompt}
-            # 同期環境で非同期を実行
-            config = {"recursion_limit": 10}
-            result = asyncio.run(st.session_state.app.ainvoke(inputs, config))
+            result = asyncio.run(st.session_state.app.ainvoke(inputs))
             
             response = result["generation"]
             st.markdown(response)
             
-            # ソースの表示
+            # --- 引用元の原文表示セクション ---
             if result.get("documents"):
-                with st.expander("参照元ドキュメント"):
-                    for doc in result["documents"]:
-                        st.write(f"- {doc.metadata.get('name', 'Unknown Source')}")
+                st.markdown("---")
+                st.subheader("📍 引用元および参照箇所（原文）")
+                
+                for i, doc in enumerate(result["documents"]):
+                    source_name = doc.metadata.get('name', '不明なファイル')
+                    page_num = doc.metadata.get('page', '不明') # make_vector側でpageを保存している場合
+                    
+                    with st.expander(f"出典 {i+1}: {source_name} (Page: {page_num})"):
+                        # 言語判定を簡易的に行い、タグを表示
+                        lang_tag = "🇺🇸 English" if any(ord(c) < 128 for c in doc.page_content[:100]) else "🇯🇵 Japanese"
+                        st.caption(f"Language: {lang_tag}")
+                        st.info(doc.page_content) # ここにPDFから抽出された原文が表示される
 
     st.session_state.messages.append({"role": "assistant", "content": response})

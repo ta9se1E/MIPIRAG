@@ -22,7 +22,8 @@ Interface: Streamlit
 ①システムイメージ
 ![アプリの画面](fig/fig1.png)
 ![アプリの画面](fig/fig2.png)
-
+![アプリの画面](fig/fig3.png)
+![アプリの画面](fig/fig4s.png)
 ## ✨ 作者
 
 **Ta9se1E**（[note](https://note.com/ta9se1)｜[GitHub](https://github.com/ta9se1E)）  
