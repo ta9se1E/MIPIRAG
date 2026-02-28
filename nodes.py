@@ -25,7 +25,6 @@ class GradeDocuments(BaseModel):
     binary_score: str = Field(description="Relevant: 'yes' or 'no'")
 
 # --- ノード関数 ---
-
 async def retrieve(state):
     """日本語と英語の両方のクエリを用いて検索を実行"""
     embeddings = OpenAIEmbeddings(model="text-embedding-3-small")
@@ -71,9 +70,26 @@ async def grade_documents(state):
 
 # --- 条件分岐用 ---
 def decide_to_generate(state):
-    if not state["documents"]:
-        return "transform_query"
-    return "generate"
+    print("---DECISION: ASSESSING GRADED DOCUMENTS---")
+    
+    # state から現在の試行回数を取得（なければ0）
+    retry_count = state.get("retry_count", 0)
+    filtered_docs = state.get("documents", [])
+    
+    # 判定ロジック
+    # ドキュメントがあり、かつ検索結果が十分なら「生成」へ
+    if filtered_docs:
+        print("---DECISION: GENERATE---")
+        return "generate"
+    
+    # ドキュメントがない、または5回以上ループしているなら諦めて生成へ
+    if retry_count >= 5:
+        print("---DECISION: GENERATE (Max retries reached)---")
+        return "generate"
+    
+    # それ以外は再検索
+    print(f"---DECISION: TRANSFORM QUERY (Attempt: {retry_count + 1})---")
+    return "transform_query"
 
 
 async def transform_query(state):
@@ -91,4 +107,9 @@ English Query: [英語のクエリ]"""
     
     full_query = rewriter.invoke({"question": state["question"]})
     # 簡単なパースで日本語と英語のクエリを抽出
-    return {"question": full_query}
+    current_count = state.get("retry_count", 0)
+    
+    return {
+        "question": full_query,
+        "retry_count": current_count + 1  # ここで更新する
+    }

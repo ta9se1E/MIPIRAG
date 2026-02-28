@@ -64,3 +64,10 @@ if prompt := st.chat_input("MIやPIに関する質問をお願いします。"):
                         st.info(doc.page_content) # ここにPDFから抽出された原文が表示される
 
     st.session_state.messages.append({"role": "assistant", "content": response})
+
+# UI部分の末尾あたりに追加(langsmith 評価用)
+if st.sidebar.button("🚀 システムを評価する (LangSmith)"):
+    with st.spinner("評価データセットを用いて全件検証中です..."):
+        from evaluation import evaluate_rag_system
+        results = evaluate_rag_system(st.session_state.app)
+        st.success("評価が完了しました！LangSmithのコンソールを確認してください。")

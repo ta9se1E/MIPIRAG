@@ -41,5 +41,11 @@ def compile_workflow():
     
     workflow.add_edge("transform_query", "retrieve")
     workflow.add_edge("generate", END)
+    
+    # compile時には何も渡さず、戻り値に対して設定を行います
+    app = workflow.compile()
+    
+    # ここで設定を適用します
+    app.recursion_limit = 10
 
-    return workflow.compile()
+    return app
