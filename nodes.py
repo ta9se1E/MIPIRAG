@@ -1,12 +1,12 @@
+#node.py
 import os
-os.environ["USER_AGENT"] = "MIPIRAG/1.0"
+os.environ["USER_AGENT"] = "MIPIRAG/2.0"
 
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from langchain_community.vectorstores import FAISS
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 from pydantic import BaseModel, Field
-
 from dotenv import load_dotenv
 
 # フォントパスの指定（必要に応じて利用）
@@ -24,29 +24,27 @@ os.environ["LANGCHAIN_TRACING_V2"] = "true"
 class GradeDocuments(BaseModel):
     binary_score: str = Field(description="Relevant: 'yes' or 'no'")
 
+# --- Retrieverの設定 ---
+# グローバル変数として保持し、初回のみロードするように最適化
+_retriever = None
+
+def get_retriever():
+    global _retriever
+    if _retriever is None:
+        embeddings = OpenAIEmbeddings(model="text-embedding-3-small")
+        # 新しく作成した vectorstore_r2 を読み込む
+        vectorstore = FAISS.load_local("./vectorstore_r2", embeddings, allow_dangerous_deserialization=True)
+        _retriever = vectorstore.as_retriever(search_kwargs={"k": 6})
+    return _retriever
+
 # --- ノード関数 ---
-
 async def retrieve(state):
-    """日本語と英語の両方のクエリを用いて検索を実行"""
-    embeddings = OpenAIEmbeddings(model="text-embedding-3-small")
-    vectorstore = FAISS.load_local("vectorstore_r1", embeddings, allow_dangerous_deserialization=True)
-    
-    # state["question"] から日英両方のクエリを取得して検索
-    # シンプルに全体を投げても text-embedding-3-small は多言語対応なので高い精度でヒットします
-    documents = vectorstore.similarity_search(state["question"], k=6) 
+    """新しいベクトルストアから関連文書を取得"""
+    print("---RETRIEVING FROM VECTORSTORE_R2---")
+    retriever = get_retriever()
+    # questionが変換されている場合もそのまま対応可能
+    documents = retriever.invoke(state["question"])
     return {"documents": documents}
-
-async def generate(state):
-    print("---GENERATING---")
-    llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
-    prompt = ChatPromptTemplate.from_messages([
-        ("system", "以下のコンテキストのみを使用して回答してください。\n\nContext: {context}"),
-        ("human", "Question: {question}")
-    ])
-    
-    rag_chain = prompt | llm | StrOutputParser()
-    generation = rag_chain.invoke({"context": state["documents"], "question": state["question"]})
-    return {"generation": generation}
 
 async def grade_documents(state):
     print("---CHECKING RELEVANCE---")
@@ -63,32 +61,52 @@ async def grade_documents(state):
     
     filtered_docs = []
     for d in state["documents"]:
+        # 評価ロジックを独立させて実行
         score = grader.invoke({"question": state["question"], "document": d.page_content})
-        if score.binary_score == "yes":
+        if score.binary_score.lower() == "yes":
             filtered_docs.append(d)
             
     return {"documents": filtered_docs}
 
-# --- 条件分岐用 ---
-def decide_to_generate(state):
-    if not state["documents"]:
-        return "transform_query"
-    return "generate"
-
-
 async def transform_query(state):
-    """日本語の質問から、英語文献検索用のクエリも生成する"""
+    """質問を検索用に最適化（英語・日本語クエリの生成）"""
+    print("---TRANSFORMING QUERY---")
     llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
     
-    system = """あなたは専門的なリライターです。
-ユーザーの質問を、日本語での検索と英語での検索（Materials Informatics/Process Intelligence分野）の両方に最適化された形式に変換してください。
-出力は以下の形式で答えてください:
-Japanese Query: [日本語のクエリ]
-English Query: [英語のクエリ]"""
+    system = """あなたは専門的なリライターです。ユーザーの質問を、日本語・英語での検索に適したクエリに変換してください。
+出力は「Japanese Query: [日本語] English Query: [英語]」の形式で記述してください。"""
     
     prompt = ChatPromptTemplate.from_messages([("system", system), ("human", "{question}")])
     rewriter = prompt | llm | StrOutputParser()
     
     full_query = rewriter.invoke({"question": state["question"]})
-    # 簡単なパースで日本語と英語のクエリを抽出
-    return {"question": full_query}
+    return {
+        "question": full_query,
+        "retry_count": state.get("retry_count", 0) + 1
+    }
+
+def decide_to_generate(state):
+    """生成に進むか、クエリ変換を行うかを判断"""
+    print("---ASSESSING GRADED DOCUMENTS---")
+    filtered_docs = state.get("documents", [])
+    retry_count = state.get("retry_count", 0)
+    
+    # 十分なドキュメントがあるか、回数制限に達したら生成へ
+    if filtered_docs or retry_count >= 5:
+        print("---DECISION: GENERATE---")
+        return "generate"
+    
+    print(f"---DECISION: TRANSFORM QUERY (Attempt: {retry_count + 1})---")
+    return "transform_query"
+
+async def generate(state):
+    print("---GENERATING---")
+    llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+    prompt = ChatPromptTemplate.from_messages([
+        ("system", "以下のコンテキストのみを使用して回答してください。\n\nContext: {context}"),
+        ("human", "Question: {question}")
+    ])
+    
+    rag_chain = prompt | llm | StrOutputParser()
+    generation = rag_chain.invoke({"context": state["documents"], "question": state["question"]})
+    return {"generation": generation}
