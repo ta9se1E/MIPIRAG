@@ -25,3 +25,5 @@ vectorstore_r1/
 *.pkl
 
 .DS_Store
+
+*.ipynb

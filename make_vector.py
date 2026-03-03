@@ -1,5 +1,6 @@
+#make_vector.py
 import os
-os.environ["USER_AGENT"] = "MIPIRAG/1.0"
+os.environ["USER_AGENT"] = "MIPIRAG/2.0"
 
 import asyncio
 from typing import List, Annotated, Literal, Sequence, TypedDict
@@ -19,8 +20,9 @@ from langchain_core.documents import Document
 
 # LangChain Text Splitters
 from langchain_text_splitters import RecursiveCharacterTextSplitter, CharacterTextSplitter
+
 # LangChain Community (Loaders, Vectorstores, Tools)
-from langchain_community.document_loaders import WebBaseLoader, PyPDFLoader
+from langchain_community.document_loaders import WebBaseLoader, PyPDFLoader, UnstructuredMarkdownLoader,TextLoader 
 from langchain_community.vectorstores import Chroma, FAISS
 from langchain_community.tools.tavily_search import TavilySearchResults
 
@@ -38,85 +40,58 @@ os.environ["LANGCHAIN_PROJECT"] = "agent-book"
 os.environ["LANGCHAIN_ENDPOINT"] = "https://api.smith.langchain.com"
 os.environ["LANGCHAIN_TRACING_V2"] = "true"
 
+# 設定
+MARKDOWN_INPUT_DIR = "./input"
+FAISS_SAVE_PATH = "./vectorstore_r2"
+EMBEDDINGS = OpenAIEmbeddings(model="text-embedding-3-small")
 
-def make_vector():
+def create_or_update_vectorstore(MARKDOWN_INPUT_DIR, FAISS_SAVE_PATH , EMBEDDINGS):
+    # 1. 新規作成または読み込み
+    if os.path.exists(os.path.join(FAISS_SAVE_PATH, "index.faiss")):
+        print("📁 既存のFAISSインデックスを読み込みます...")
+        vectorstore = FAISS.load_local(FAISS_SAVE_PATH, EMBEDDINGS, allow_dangerous_deserialization=True)
+    else:
+        print("🆕 新規作成を開始します...")
+        vectorstore = None
+
+    text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=100)
+    all_docs = []
     
-    dirname = "input"
-    files = []
-
-    for filename in os.listdir(dirname):
-        full_path = os.path.join(dirname, filename)
-        if os.path.isfile(full_path):
-            files.append({"name": filename, "path": full_path})
-            
-    #embeddings= OpenAIEmbeddings(model="text-embedding-3-small")
-    #dummy_text, dummy_id = "1", 1
-    #vectorstore = FAISS.from_texts([dummy_text], embeddings, ids=[dummy_id])
-    #vectorstore.delete([dummy_id])
+    # フォルダ構造を考慮した探索
+    for root, dirs, files in os.walk(MARKDOWN_INPUT_DIR):
+        for file in files:
+            if file.endswith(".md"): 
+                file_path = os.path.join(root, file)
+                folder_name = os.path.basename(root)
+                print(f"📄 処理中: {file_path} (論文: {folder_name})")
+                
+                try:
+                    loader = TextLoader(file_path, encoding='utf-8')
+                    docs = loader.load()
+                    # 分割処理を追加
+                    split_docs = text_splitter.split_documents(docs)
+                    
+                    # メタデータ付与
+                    for doc in split_docs:
+                        doc.metadata["source_paper"] = folder_name
+                    
+                    # リストに追加！
+                    all_docs.extend(split_docs)
+                except Exception as e:
+                    print(f"❌ エラー ({file_path}): {e}")
     
-    return files
-
-
-
-def create_vectorstore(files):
-    embeddings = OpenAIEmbeddings(model="text-embedding-3-small")
-    vectorstore = None
-
-    # 1. さらに小さめのサイズで分割（1000文字 ≒ 約1500〜2000トークン程度）
-    text_splitter = RecursiveCharacterTextSplitter(
-        chunk_size=1000, 
-        chunk_overlap=100,
-        separators=["\n\n", "\n", "。", "、", " ", ""] # 最後に空文字を入れて強制切断を有効化
-    )
-
-    for file in files:
-        print(f"📄 処理中: {file['name']}")
-        try:
-            loader = PyPDFLoader(file["path"])
-            pages = loader.load()
-            if not pages: continue
-
-            for page in pages:
-                page.metadata["source"] = file["path"]
-                page.metadata["name"] = file["name"]
-
-            # 2. 分割実行
-            raw_docs = text_splitter.split_documents(pages)
-            
-            # 3. 【重要】物理的な文字列スライスによる二重の安全策
-            final_docs = []
-            for doc in raw_docs:
-                content = doc.page_content
-                # 3000文字(絶対安全圏)を超えていたら、強制的に切り刻む
-                if len(content) > 3000:
-                    for i in range(0, len(content), 2000):
-                        final_docs.append(Document(
-                            page_content=content[i:i+2000], 
-                            metadata=doc.metadata
-                        ))
-                else:
-                    final_docs.append(doc)
-
-            # 4. 【重要】1件ずつベクトルストアに追加する（一括送信による制限を回避）
-            if final_docs:
-                for i in range(0, len(final_docs), 10): # 10件ずつの小バッチで処理
-                    batch = final_docs[i:i+10]
-                    if vectorstore is None:
-                        vectorstore = FAISS.from_documents(batch, embeddings)
-                    else:
-                        vectorstore.add_documents(batch)
-                print(f"   -> {len(final_docs)} 個のチャンクを処理完了")
-
-        except Exception as e:
-            print(f"❌ エラー発生 ({file['name']}): {e}")
-            continue
-
-    if vectorstore:
-        vectorstore.save_local("./vectorstore_r1")
-        print("\n✅ 保存完了！")
+    # 3. 追加処理
+    if all_docs:
+        if vectorstore is None:
+            vectorstore = FAISS.from_documents(all_docs, EMBEDDINGS)
+        else:
+            # すでに学習済みのファイルとの重複を避ける工夫が必要
+            vectorstore.add_documents(all_docs)
+        
+        vectorstore.save_local(FAISS_SAVE_PATH)
+        print(f"\n✅ 保存完了: {FAISS_SAVE_PATH}")
+    
     return vectorstore
 
 if __name__ == "__main__":
-    files = make_vector() # 前回のファイルリスト取得関数
-    if files:
-        create_vectorstore(files)
+    create_or_update_vectorstore(MARKDOWN_INPUT_DIR, FAISS_SAVE_PATH , EMBEDDINGS)
