@@ -1,6 +1,6 @@
 #node.py
 import os
-os.environ["USER_AGENT"] = "MIPIRAG/2.0"
+os.environ["USER_AGENT"] = "MIPIRAG/3.0"
 
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from langchain_community.vectorstores import FAISS
@@ -32,15 +32,15 @@ def get_retriever():
     global _retriever
     if _retriever is None:
         embeddings = OpenAIEmbeddings(model="text-embedding-3-small")
-        # 新しく作成した vectorstore_r2 を読み込む
-        vectorstore = FAISS.load_local("./vectorstore_r2", embeddings, allow_dangerous_deserialization=True)
+        # 新しく作成した vectorstore_r3 を読み込む
+        vectorstore = FAISS.load_local("./vectorstore_r3", embeddings, allow_dangerous_deserialization=True)
         _retriever = vectorstore.as_retriever(search_kwargs={"k": 6})
     return _retriever
 
 # --- ノード関数 ---
 async def retrieve(state):
     """新しいベクトルストアから関連文書を取得"""
-    print("---RETRIEVING FROM VECTORSTORE_R2---")
+    print("---RETRIEVING FROM VECTORSTORE_R3---")
     retriever = get_retriever()
     # questionが変換されている場合もそのまま対応可能
     documents = retriever.invoke(state["question"])
@@ -102,11 +102,17 @@ def decide_to_generate(state):
 async def generate(state):
     print("---GENERATING---")
     llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+    
+    # Contextを整理：画像とテキストを区別してプロンプトに渡す
+    context_text = "\n\n".join([d.page_content for d in state["documents"] if d.metadata.get("type") == "text"])
+    images_info = "\n\n".join([f"- 出典: {d.metadata['source_paper']}, パス: {d.metadata['image_path']}, 説明: {d.page_content}" 
+                               for d in state["documents"] if d.metadata.get("type") == "image"])
+    
     prompt = ChatPromptTemplate.from_messages([
-        ("system", "以下のコンテキストのみを使用して回答してください。\n\nContext: {context}"),
+        ("system", "以下のコンテキスト(テキスト情報と図の説明)を使用して回答してください。\n\n[テキスト情報]\n{context_text}\n\n[図の参照情報]\n{images_info}\n\n回答の中に図が関連する場合は、必ずその図のパス（image_path）を明記してください。"),
         ("human", "Question: {question}")
     ])
     
     rag_chain = prompt | llm | StrOutputParser()
-    generation = rag_chain.invoke({"context": state["documents"], "question": state["question"]})
+    generation = rag_chain.invoke({"context_text": context_text, "images_info": images_info, "question": state["question"]})
     return {"generation": generation}
