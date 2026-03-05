@@ -20,11 +20,6 @@ input/
 # =========================
 # 4. ベクトルストア
 # =========================
-
-vectorstore_r2/
-*.faiss
-*.pkl
-
 vectorstore_r3/
 *.faiss
 *.pkl
@@ -32,6 +27,3 @@ vectorstore_r3/
 .DS_Store
 
 *.ipynb
-
-make_json.py
-generate_integration_json.py

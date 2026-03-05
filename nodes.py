@@ -2,12 +2,18 @@
 import os
 os.environ["USER_AGENT"] = "MIPIRAG/3.0"
 
+from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from langchain_community.vectorstores import FAISS
+from langchain_community.retrievers import BM25Retriever
+from langchain_cohere import CohereRerank
+from langchain.retrievers import EnsembleRetriever  # 0.2系での正規パス
+from langchain.retrievers import ContextualCompressionRetriever # 0.2系での正規パス
+
+# その他必要なモジュール
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 from pydantic import BaseModel, Field
-from dotenv import load_dotenv
 
 # フォントパスの指定（必要に応じて利用）
 font_path1 = "./font/NotoSansJP-Regular.ttf"
@@ -16,9 +22,11 @@ load_dotenv(dotenv_path=".env")
 
 os.environ["OPENAI_API_KEY"] = os.getenv('OPENAI_API_KEY')
 os.environ["LANGCHAIN_API_KEY"] = os.getenv("LANGCHAIN_API_KEY")
+os.environ["COHERE_API_KEY"] = os.getenv("COHERE_API")
 os.environ["LANGCHAIN_PROJECT"] = "agent-book"
 os.environ["LANGCHAIN_ENDPOINT"] = "https://api.smith.langchain.com"
 os.environ["LANGCHAIN_TRACING_V2"] = "true"
+
 
 # --- スコアリング用のデータ構造 ---
 class GradeDocuments(BaseModel):
@@ -28,21 +36,39 @@ class GradeDocuments(BaseModel):
 # グローバル変数として保持し、初回のみロードするように最適化
 _retriever = None
 
-def get_retriever():
+def get_retriever(all_docs=None):
     global _retriever
     if _retriever is None:
         embeddings = OpenAIEmbeddings(model="text-embedding-3-small")
-        # 新しく作成した vectorstore_r3 を読み込む
         vectorstore = FAISS.load_local("./vectorstore_r3", embeddings, allow_dangerous_deserialization=True)
-        _retriever = vectorstore.as_retriever(search_kwargs={"k": 6})
+        vector_retriever = vectorstore.as_retriever(search_kwargs={"k": 5})
+        
+        bm25_retriever = BM25Retriever.from_documents(all_docs)
+        bm25_retriever.k = 5
+        
+        # 自作のアンサンブルクラスを使用
+        ensemble_retriever = EnsembleRetriever(
+            retrievers=[vector_retriever, bm25_retriever],
+            weights=[0.6, 0.4]
+        )
+        
+        reranker = CohereRerank(model="rerank-multilingual-v3.0", top_n=5)
+        _retriever = ContextualCompressionRetriever(
+            base_compressor=reranker, base_retriever=ensemble_retriever
+        )
     return _retriever
 
-# --- ノード関数 ---
 async def retrieve(state):
-    """新しいベクトルストアから関連文書を取得"""
-    print("---RETRIEVING FROM VECTORSTORE_R3---")
-    retriever = get_retriever()
-    # questionが変換されている場合もそのまま対応可能
+    print("---RETRIEVING FROM VECTORSTORE_R3 WITH HYBRID/RERANK---")
+    
+    # 実際には、get_retrieverを呼ぶ前に all_docs がロードされている必要があります。
+    # ここでは、もし初回でなければ引数なしでも動くように工夫します
+    try:
+        retriever = get_retriever()
+    except ValueError:
+        # ここで再度ロードを試みる、あるいはエラーを投げる処理
+        raise ValueError("システム起動時に Retriever が初期化されていません。")
+        
     documents = retriever.invoke(state["question"])
     return {"documents": documents}
 
@@ -103,16 +129,31 @@ async def generate(state):
     print("---GENERATING---")
     llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
     
-    # Contextを整理：画像とテキストを区別してプロンプトに渡す
-    context_text = "\n\n".join([d.page_content for d in state["documents"] if d.metadata.get("type") == "text"])
+    # フィルタリングされたドキュメントを取得
+    docs = state["documents"]
+    
+    # Contextを整理
+    context_text = "\n\n".join([d.page_content for d in docs if d.metadata.get("type") == "text"])
     images_info = "\n\n".join([f"- 出典: {d.metadata['source_paper']}, パス: {d.metadata['image_path']}, 説明: {d.page_content}" 
-                               for d in state["documents"] if d.metadata.get("type") == "image"])
+                               for d in docs if d.metadata.get("type") == "image"])
     
     prompt = ChatPromptTemplate.from_messages([
-        ("system", "以下のコンテキスト(テキスト情報と図の説明)を使用して回答してください。\n\n[テキスト情報]\n{context_text}\n\n[図の参照情報]\n{images_info}\n\n回答の中に図が関連する場合は、必ずその図のパス（image_path）を明記してください。"),
+        ("system", "以下のコンテキストを使用して回答してください。\n\n[テキスト情報]\n{context_text}\n\n[図の参照情報]\n{images_info}"),
         ("human", "Question: {question}")
     ])
     
     rag_chain = prompt | llm | StrOutputParser()
-    generation = rag_chain.invoke({"context_text": context_text, "images_info": images_info, "question": state["question"]})
-    return {"generation": generation}
+    generation = rag_chain.invoke({
+        "context_text": context_text, 
+        "images_info": images_info, 
+        "question": state["question"]
+    })
+    
+    # 【変更点】generationに加え、使用したドキュメントのメタデータを返す
+    source_metadata = [{"source": d.metadata.get("source_paper"), "type": d.metadata.get("type")} for d in docs]
+    
+    return {
+        "generation": generation,
+        "documents": docs,  
+        "source_metadata": source_metadata # これをグラフのstateに追加
+    }

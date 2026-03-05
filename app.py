@@ -6,6 +6,9 @@ import streamlit as st
 import asyncio
 from dotenv import load_dotenv
 from graph_engine import compile_workflow
+from nodes import get_retriever
+# 必要に応じて、全ドキュメントを読み込むための関数（make_vector.pyのロジックを流用）
+from loader import load_all_docs 
 
 # フォントパスの指定（必要に応じて利用）
 font_path1 = "./font/NotoSansJP-Regular.ttf"
@@ -21,10 +24,17 @@ os.environ["LANGCHAIN_TRACING_V2"] = "true"
 st.set_page_config(page_title="Adaptive RAG (Vector Only)", layout="wide")
 st.title("📚 研究論文 RAG システム (画像対応版)")
 
-# ワークフローの初期化
+# --- ワークフローの初期化 ---
 if "app" not in st.session_state:
+    # 1. ここで全ドキュメントをロード
+    print("---LOADING DOCUMENTS FOR RETRIEVER---")
+    all_docs = load_all_docs("./input") 
+    
+    # 2. ロードした全ドキュメントを渡してRetrieverを初期化
+    get_retriever(all_docs=all_docs)
+    
+    # 3. ワークフローをコンパイル
     st.session_state.app = compile_workflow()
-
 if "messages" not in st.session_state:
     st.session_state.messages = []
     
@@ -66,20 +76,26 @@ if prompt := st.chat_input("MIやPIに関する質問を入力してください
             found_images = []
             if result.get("documents"):
                 st.markdown("---")
-                st.subheader("🖼️ 関連する図")
                 
-                # 画像タイプのドキュメントのみ抽出して表示
+                # 1. 画像表示セクション
                 image_docs = [d for d in result["documents"] if d.metadata.get("type") == "image"]
-                
                 if image_docs:
+                    st.subheader("🖼️ 関連する図")
                     for doc in image_docs:
                         img_path = doc.metadata.get("image_path")
                         if img_path and os.path.exists(img_path):
                             st.image(img_path, caption=f"出典: {doc.metadata.get('source_paper')}")
                             found_images.append(img_path)
-                else:
+                else: # ← 画像がない場合のelseはここに配置
                     st.info("関連する図は見つかりませんでした。")
-
+                
+                # 2. 引用元一覧表示（画像セクションの外部へ！）
+                if "source_metadata" in result:
+                    st.subheader("🔗 引用元ソース一覧")
+                    for meta in result["source_metadata"]:
+                        st.write(f"- {meta['source']} ({meta['type']})")
+                    
+                    
                 # --- 引用元の原文セクション ---
                 st.subheader("📍 引用元テキスト")
                 for i, doc in enumerate(result["documents"]):
@@ -88,7 +104,7 @@ if prompt := st.chat_input("MIやPIに関する質問を入力してください
                         with st.expander(f"出典 {i+1}: {source}"):
                             st.markdown(doc.page_content)
 
-            st.session_state.messages.append({"role": "assistant", "content": response, "images": found_images})
+                st.session_state.messages.append({"role": "assistant", "content": response, "images": found_images})
 
         except Exception as e:
             status.update(label="❌ エラーが発生しました", state="error")
