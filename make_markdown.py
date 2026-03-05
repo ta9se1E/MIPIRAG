@@ -7,6 +7,8 @@
 #from google.colab import drive
 #drive.mount('/content/drive')
 
+import os
+os.environ["USER_AGENT"] = "MIPIRAG/3.0"
 #ライブラリー インストール
 import os
 from marker.models import create_model_dict
@@ -15,8 +17,8 @@ from marker.output import text_from_rendered
 
 
 # 設定
-INPUT_DIR = "/content/drive/MyDrive/MI_PI_研究/参考文献"#PDFファイル保管名
-OUTPUT_ROOT = "/content/drive/MyDrive/MI_PI_研究/markdown_output"#markdown出力先
+INPUT_DIR = "./pdfs"#PDFファイル保管名
+OUTPUT_ROOT = "./input"#markdown出力先
 
 # モデル準備
 artifact_dict = create_model_dict()

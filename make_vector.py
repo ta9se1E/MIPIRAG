@@ -1,12 +1,14 @@
 #make_vector.py
 import os
-os.environ["USER_AGENT"] = "MIPIRAG/2.0"
+os.environ["USER_AGENT"] = "MIPIRAG/3.0"
 
 import asyncio
 from typing import List, Annotated, Literal, Sequence, TypedDict
-
 import streamlit as st
 from dotenv import load_dotenv
+import json
+import glob
+from pathlib import Path
 
 # Pydantic (v2推奨)
 from pydantic import BaseModel, Field
@@ -42,56 +44,76 @@ os.environ["LANGCHAIN_TRACING_V2"] = "true"
 
 # 設定
 MARKDOWN_INPUT_DIR = "./input"
-FAISS_SAVE_PATH = "./vectorstore_r2"
+FAISS_SAVE_PATH = "./vectorstore_r3"
 EMBEDDINGS = OpenAIEmbeddings(model="text-embedding-3-small")
 
-def create_or_update_vectorstore(MARKDOWN_INPUT_DIR, FAISS_SAVE_PATH , EMBEDDINGS):
-    # 1. 新規作成または読み込み
-    if os.path.exists(os.path.join(FAISS_SAVE_PATH, "index.faiss")):
-        print("📁 既存のFAISSインデックスを読み込みます...")
-        vectorstore = FAISS.load_local(FAISS_SAVE_PATH, EMBEDDINGS, allow_dangerous_deserialization=True)
-    else:
-        print("🆕 新規作成を開始します...")
-        vectorstore = None
-
+def create_or_update_vectorstore(input_dir, save_path, embeddings):
     text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=100)
     all_docs = []
     
-    # フォルダ構造を考慮した探索
-    for root, dirs, files in os.walk(MARKDOWN_INPUT_DIR):
-        for file in files:
-            if file.endswith(".md"): 
-                file_path = os.path.join(root, file)
-                folder_name = os.path.basename(root)
-                print(f"📄 処理中: {file_path} (論文: {folder_name})")
-                
-                try:
-                    loader = TextLoader(file_path, encoding='utf-8')
-                    docs = loader.load()
-                    # 分割処理を追加
-                    split_docs = text_splitter.split_documents(docs)
-                    
-                    # メタデータ付与
-                    for doc in split_docs:
-                        doc.metadata["source_paper"] = folder_name
-                    
-                    # リストに追加！
-                    all_docs.extend(split_docs)
-                except Exception as e:
-                    print(f"❌ エラー ({file_path}): {e}")
+    # 既存のインデックスがある場合、登録済み論文名を抽出
+    processed_papers = set()
+    vectorstore = None
     
-    # 3. 追加処理
+    if os.path.exists(os.path.join(save_path, "index.faiss")):
+        print("📁 既存のインデックスを読み込みます...")
+        vectorstore = FAISS.load_local(save_path, embeddings, allow_dangerous_deserialization=True)
+        # docstoreから既存のメタデータを取得（簡易的に全てのdocのsource_paperを取得）
+        processed_papers = {doc.metadata.get("source_paper") for doc in vectorstore.docstore._dict.values() if "source_paper" in doc.metadata}
+        print(f"   登録済み論文数: {len(processed_papers)}")
+    else:
+        print("🆕 新規作成を開始します...")
+
+    # 論文フォルダを巡回
+    for paper_folder in Path(input_dir).iterdir():
+        if not paper_folder.is_dir(): continue
+        
+        paper_name = paper_folder.name
+        if paper_name in processed_papers:
+            print(f"⏩ スキップ: {paper_name} (既に登録済み)")
+            continue
+            
+        print(f"📄 処理中: {paper_name}")
+        
+        # 1. マークダウンの処理
+        md_file = paper_folder / "document.md"
+        if md_file.exists():
+            loader = TextLoader(str(md_file), encoding='utf-8')
+            docs = loader.load()
+            split_docs = text_splitter.split_documents(docs)
+            
+            for doc in split_docs:
+                doc.metadata.update({"type": "text", "source_paper": paper_name})
+            all_docs.extend(split_docs)
+        
+        # 2. 図のメタデータ処理
+        fig_meta_path = paper_folder / "figures_summary.json"
+        if fig_meta_path.exists():
+            with open(fig_meta_path, "r", encoding="utf-8") as f:
+                figs = json.load(f)
+                for fig in figs:
+                    all_docs.append(Document(
+                        page_content=f"図の説明: {fig['caption']}\n詳細: {fig['summary']}",
+                        metadata={
+                            "type": "image",
+                            "source_paper": paper_name,
+                            "image_path": str(Path(fig['img_path']))
+                        }
+                    ))
+    
+    # 3. ベクトルストアへの登録
     if all_docs:
         if vectorstore is None:
-            vectorstore = FAISS.from_documents(all_docs, EMBEDDINGS)
+            vectorstore = FAISS.from_documents(all_docs, embeddings)
         else:
-            # すでに学習済みのファイルとの重複を避ける工夫が必要
             vectorstore.add_documents(all_docs)
         
-        vectorstore.save_local(FAISS_SAVE_PATH)
-        print(f"\n✅ 保存完了: {FAISS_SAVE_PATH}")
+        vectorstore.save_local(save_path)
+        print(f"\n✅ 保存完了: {save_path}")
+    else:
+        print("\nℹ️ 新規登録対象のドキュメントはありませんでした。")
     
     return vectorstore
 
 if __name__ == "__main__":
-    create_or_update_vectorstore(MARKDOWN_INPUT_DIR, FAISS_SAVE_PATH , EMBEDDINGS)
+    create_or_update_vectorstore(MARKDOWN_INPUT_DIR, FAISS_SAVE_PATH, EMBEDDINGS)

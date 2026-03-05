@@ -1,6 +1,6 @@
 #graph_engine.py
 import os
-os.environ["USER_AGENT"] = "MIPIRAG/2.0"
+os.environ["USER_AGENT"] = "MIPIRAG/3.0"
 
 from langgraph.graph import StateGraph, START, END
 from state import GraphState
