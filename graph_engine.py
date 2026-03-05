@@ -4,7 +4,7 @@ os.environ["USER_AGENT"] = "MIPIRAG/3.0"
 
 from langgraph.graph import StateGraph, START, END
 from state import GraphState
-from nodes import retrieve, generate, grade_documents, transform_query, decide_to_generate
+from nodes import retrieve, generate, grade_documents, transform_query, decide_to_generate, generate_diagram_node
 from dotenv import load_dotenv
 
 # フォントパスの指定（必要に応じて利用）
@@ -27,6 +27,7 @@ def compile_workflow():
     workflow.add_node("retrieve", retrieve)
     workflow.add_node("grade_documents", grade_documents)
     workflow.add_node("generate", generate)
+    workflow.add_node("generate_diagram", generate_diagram_node) # 追加
     workflow.add_node("transform_query", transform_query)
 
     # 2. エッジ（処理の流れ）の定義
@@ -45,7 +46,8 @@ def compile_workflow():
     
     # ループ処理の接続
     workflow.add_edge("transform_query", "retrieve")
-    workflow.add_edge("generate", END)
+    workflow.add_edge("generate", "generate_diagram")
+    workflow.add_edge("generate_diagram", END)
     
     # 3. コンパイル
     app = workflow.compile()

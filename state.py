@@ -6,3 +6,5 @@ class GraphState(TypedDict):
     generation: str
     documents: List[any] # Documentオブジェクトのリスト
     retry_count: int  # 試行回数をカウントするフィールドを追加
+    source_metadata: List[dict] # 追加
+    image_url: str
